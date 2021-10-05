@@ -139,20 +139,22 @@ enum X86_64Reloc {
 
 enum ARM64Reloc {
     /*
-     * These are defined as an enum in /usr/include/mach-o/arm64/reloc.h, which we reproduce. Of
-     * course, take care to preserve the order!
+     * These are defined as an enum in
+     * https://github.com/apple/darwin-xnu/blob/2ff845c2e033bd0ff64b5b6aa6063a1f8f65aa32/
+     * EXTERNAL_HEADERS/mach-o/arm64/reloc.h#L26, which we reproduce. Of course, take care to
+     * preserve the order!
      */
-    UNSIGNED,
-    SUBTRACTOR,
-    BRANCH26,
-    PAGE21,
-    PAGEOFF12,
-    GOT_LOAD_PAGE21,
-    GOT_LOAD_PAGEOFF12,
-    POINTER_TO_GOT,
-    TLVP_LOAD_PAGE21,
-    TLVP_LOAD_PAGEOFF12,
-    ADDEND;
+    UNSIGNED, // for pointers
+    SUBTRACTOR, // must be followed by a ARM64_RELOC_UNSIGNED
+    BRANCH26, // a B/BL instruction with 26-bit displacement
+    PAGE21, // pc-rel distance to page of target
+    PAGEOFF12, // offset within page, scaled by r_length
+    GOT_LOAD_PAGE21, // pc-rel distance to page of GOT slot
+    GOT_LOAD_PAGEOFF12, // offset within page of GOT slot, scaled by r_length
+    POINTER_TO_GOT, // for pointers to GOT slots
+    TLVP_LOAD_PAGE21, // pc-rel distance to page of TLVP slot
+    TLVP_LOAD_PAGEOFF12, // offset within page of TLVP slot, scaled by r_length
+    ADDEND; // must be followed by PAGE21 or PAGEOFF12
 
     public int getValue() {
         return ordinal();

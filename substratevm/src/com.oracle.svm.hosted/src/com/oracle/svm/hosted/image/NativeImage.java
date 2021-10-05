@@ -604,8 +604,7 @@ public abstract class NativeImage extends AbstractImage {
         assert targetObjectInfo != null;
         String targetSectionName = heapSection.getName();
         long address = targetObjectInfo.getAddress();
-        long relocationInfoAddend = info.hasExplicitAddend() ? info.getExplicitAddend() : 0L;
-        long relocationAddend = address + relocationInfoAddend;
+        long relocationAddend = address + info.getExplicitAddend();
         sectionImpl.markRelocationSite(offset, info.getRelocationKind(), targetSectionName, false, relocationAddend);
     }
 

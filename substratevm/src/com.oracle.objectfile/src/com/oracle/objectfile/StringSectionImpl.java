@@ -124,12 +124,12 @@ public abstract class StringSectionImpl extends BasicElementImpl implements Prog
     }
 
     @Override
-    public void markRelocationSite(int offset, RelocationKind k, String symbolName, boolean useImplicitAddend, Long explicitAddend) {
+    public void markRelocationSite(int offset, RelocationKind k, String symbolName, boolean useImplicitAddend, long explicitAddend) {
         throw new UnsupportedOperationException("can't mark relocaction sites in string section");
     }
 
     @Override
-    public void markRelocationSite(int offset, ByteBuffer bb, RelocationKind k, String symbolName, boolean useImplicitAddend, Long explicitAddend) {
+    public void markRelocationSite(int offset, ByteBuffer bb, RelocationKind k, String symbolName, boolean useImplicitAddend, long explicitAddend) {
         throw new UnsupportedOperationException("can't mark relocaction sites in string section");
     }
 

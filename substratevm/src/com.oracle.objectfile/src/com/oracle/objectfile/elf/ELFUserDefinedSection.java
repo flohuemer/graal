@@ -147,8 +147,8 @@ public class ELFUserDefinedSection extends ELFSection implements ObjectFile.Relo
     }
 
     @Override
-    public void markRelocationSite(int offset, ByteBuffer bb, ObjectFile.RelocationKind k, String symbolName, boolean useImplicitAddend, Long explicitAddend) {
-        if (useImplicitAddend != (explicitAddend == null)) {
+    public void markRelocationSite(int offset, ByteBuffer bb, ObjectFile.RelocationKind k, String symbolName, boolean useImplicitAddend, long explicitAddend) {
+        if (useImplicitAddend && explicitAddend != 0) {
             throw new IllegalArgumentException("must have either an explicit or implicit addend");
         }
         ELFSymtab syms = (ELFSymtab) getOwner().elementForName(".symtab");
@@ -156,6 +156,6 @@ public class ELFUserDefinedSection extends ELFSection implements ObjectFile.Relo
         assert symbolName != null;
         ELFSymtab.Entry ent = syms.getSymbol(symbolName);
         assert ent != null;
-        rs.addEntry(this, offset, ELFMachine.getRelocation(getOwner().getMachine(), k), ent, explicitAddend);
+        rs.addEntry(this, offset, ELFMachine.getRelocation(getOwner().getMachine(), k), ent, useImplicitAddend, explicitAddend);
     }
 }

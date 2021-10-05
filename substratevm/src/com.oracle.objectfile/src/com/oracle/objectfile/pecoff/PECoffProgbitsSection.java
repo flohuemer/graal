@@ -69,7 +69,7 @@ public class PECoffProgbitsSection extends PECoffUserDefinedSection implements P
     }
 
     @Override
-    public void markRelocationSite(int offset, ObjectFile.RelocationKind k, String symbolName, boolean useImplicitAddend, Long explicitAddend) {
+    public void markRelocationSite(int offset, ObjectFile.RelocationKind k, String symbolName, boolean useImplicitAddend, long explicitAddend) {
         markRelocationSite(offset, ByteBuffer.wrap(getContent()).order(getOwner().getByteOrder()), k, symbolName, useImplicitAddend, explicitAddend);
     }
 }

@@ -53,10 +53,10 @@ public final class RelocatableBuffer {
     }
 
     public void addRelocationWithoutAddend(int key, ObjectFile.RelocationKind relocationKind, Object targetObject) {
-        relocations.put(key, new Info(relocationKind, null, targetObject));
+        relocations.put(key, new Info(relocationKind, 0L, targetObject));
     }
 
-    public void addRelocationWithAddend(int key, ObjectFile.RelocationKind relocationKind, Long explicitAddend, Object targetObject) {
+    public void addRelocationWithAddend(int key, ObjectFile.RelocationKind relocationKind, long explicitAddend, Object targetObject) {
         relocations.put(key, new Info(relocationKind, explicitAddend, targetObject));
     }
 
@@ -78,7 +78,7 @@ public final class RelocatableBuffer {
 
     static final class Info {
         private final ObjectFile.RelocationKind relocationKind;
-        private final Long explicitAddend;
+        private final long explicitAddend;
         /**
          * The referenced object on the heap. If this is an instance of a {@link RelocatedPointer},
          * than the relocation is not treated as a data relocation but has a special meaning, e.g. a
@@ -86,7 +86,7 @@ public final class RelocatableBuffer {
          */
         private final Object targetObject;
 
-        Info(ObjectFile.RelocationKind kind, Long explicitAddend, Object targetObject) {
+        Info(ObjectFile.RelocationKind kind, long explicitAddend, Object targetObject) {
             this.relocationKind = kind;
             this.explicitAddend = explicitAddend;
             this.targetObject = targetObject;
@@ -100,11 +100,7 @@ public final class RelocatableBuffer {
             return relocationKind;
         }
 
-        public boolean hasExplicitAddend() {
-            return (explicitAddend != null);
-        }
-
-        public Long getExplicitAddend() {
+        public long getExplicitAddend() {
             return explicitAddend;
         }
 

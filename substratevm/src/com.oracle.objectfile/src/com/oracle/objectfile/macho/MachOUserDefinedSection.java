@@ -29,6 +29,8 @@ import java.nio.ByteBuffer;
 import java.util.EnumSet;
 import java.util.Map;
 
+import org.graalvm.compiler.debug.GraalError;
+
 import com.oracle.objectfile.BuildDependency;
 import com.oracle.objectfile.ElementImpl;
 import com.oracle.objectfile.LayoutDecision;
@@ -159,7 +161,7 @@ public class MachOUserDefinedSection extends MachOSection implements ObjectFile.
     }
 
     @Override
-    public void markRelocationSite(int offset, ByteBuffer bb, RelocationKind k, String symbolName, boolean useImplicitAddend, Long explicitAddend) {
+    public void markRelocationSite(int offset, ByteBuffer bb, RelocationKind k, String symbolName, boolean useImplicitAddend, long explicitAddend) {
         MachORelocationElement el = getOrCreateRelocationElement(useImplicitAddend);
         AssemblyBuffer sbb = new AssemblyBuffer(bb);
         sbb.setByteOrder(getOwner().getByteOrder());
@@ -172,17 +174,14 @@ public class MachOUserDefinedSection extends MachOSection implements ObjectFile.
         int length = ObjectFile.RelocationKind.getRelocationSize(k);
         long currentInlineAddendValue = sbb.readTruncatedLong(length);
         long desiredInlineAddendValue;
-        if (explicitAddend != null) {
-            /*
-             * This assertion is conservatively disallowing double-addend (could
-             * "add currentValue to explicitAddend"), because that seems more likely to be a bug
-             * than a feature.
-             */
-            assert currentInlineAddendValue == 0;
-            desiredInlineAddendValue = explicitAddend;
-        } else {
-            desiredInlineAddendValue = currentInlineAddendValue;
-        }
+        GraalError.guarantee(!useImplicitAddend, "This is never being used");
+        /*
+         * This assertion is conservatively disallowing double-addend (could
+         * "add currentValue to explicitAddend"), because that seems more likely to be a bug than a
+         * feature.
+         */
+        assert currentInlineAddendValue == 0;
+        desiredInlineAddendValue = explicitAddend;
 
         /*
          * One more complication: for PC-relative relocation, at least on x86-64, Mach-O linkers

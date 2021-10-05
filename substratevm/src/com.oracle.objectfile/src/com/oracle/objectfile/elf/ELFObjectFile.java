@@ -469,9 +469,9 @@ public class ELFObjectFile extends ObjectFile {
          */
         class Struct {
 
-            IdentStruct ident = new IdentStruct();
-            ELFType type;
-            ELFMachine machine;
+            final IdentStruct ident;
+            final ELFType type;
+            final ELFMachine machine;
             int version;
             long entry;
             long phoff;
@@ -484,10 +484,10 @@ public class ELFObjectFile extends ObjectFile {
             short shnum;
             short shstrndx;
 
-            Struct() {
+            Struct(ELFType type, ELFMachine machine) {
                 ident = new IdentStruct();
-                type = ELFType.NONE;
-                machine = ELFMachine.NONE;
+                this.type = type;
+                this.machine = machine;
             }
 
             /**
@@ -614,11 +614,10 @@ public class ELFObjectFile extends ObjectFile {
             return dependencies;
         }
 
-        @Override
-        public byte[] getOrDecideContent(Map<Element, LayoutDecisionMap> alreadyDecided, byte[] contentHint) {
+        private OutputAssembler writeToOutputAssembler(Map<Element, LayoutDecisionMap> alreadyDecided) {
             // we serialize ourselves by writing a Struct to a bytebuffer
             OutputAssembler oa = AssemblyBuffer.createOutputAssembler(getDataEncoding().toByteOrder());
-            Struct contents = new Struct(); // also creates ident struct, which we need to populate
+            Struct contents = new Struct(getType(), getMachine()); // also creates ident struct, which we need to populate
 
             // don't assign magic -- its default value is correct
             contents.ident.fileClass = getFileClass();
@@ -626,8 +625,6 @@ public class ELFObjectFile extends ObjectFile {
             contents.ident.version = getVersion();
             contents.ident.osabi = getOsAbi();
             contents.ident.abiVersion = (char) getAbiVersion();
-            contents.type = getType();
-            contents.machine = getMachine();
             contents.version = getVersion();
             contents.entry = 0;
             contents.shoff = (int) alreadyDecided.get(sht).getDecidedValue(LayoutDecision.Kind.OFFSET);
@@ -653,6 +650,12 @@ public class ELFObjectFile extends ObjectFile {
             contents.shstrndx = sawShStrTab ? index : 0;
             contents.write(oa);
 
+            return oa;
+        }
+
+        @Override
+        public byte[] getOrDecideContent(Map<Element, LayoutDecisionMap> alreadyDecided, byte[] contentHint) {
+            OutputAssembler oa = writeToOutputAssembler(alreadyDecided);
             if (contentHint != null) {
                 // FIXME: (for roundtripping) now we've written our own content,
                 // if we were passed a hint,
@@ -668,7 +671,7 @@ public class ELFObjectFile extends ObjectFile {
 
         @Override
         public int getOrDecideSize(Map<Element, LayoutDecisionMap> alreadyDecided, int sizeHint) {
-            int size = (new Struct()).getWrittenSize();
+            int size = writeToOutputAssembler(alreadyDecided).pos();
             assert sizeHint == -1 || sizeHint == size;
             return size;
         }

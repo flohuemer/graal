@@ -113,13 +113,13 @@ public class BasicProgbitsSectionImpl extends BasicElementImpl implements Progbi
     }
 
     @Override
-    public void markRelocationSite(int offset, RelocationKind k, String symbolName, boolean useImplicitAddend, Long explicitAddend) {
+    public void markRelocationSite(int offset, RelocationKind k, String symbolName, boolean useImplicitAddend, long explicitAddend) {
         ((RelocatableSectionImpl) getElement()).markRelocationSite(offset, ByteBuffer.wrap(getContent()).order(getOwner().getByteOrder()), k, symbolName, useImplicitAddend,
                         explicitAddend);
     }
 
     @Override
-    public final void markRelocationSite(int offset, ByteBuffer bb, RelocationKind k, String symbolName, boolean useImplicitAddend, Long explicitAddend) {
+    public final void markRelocationSite(int offset, ByteBuffer bb, RelocationKind k, String symbolName, boolean useImplicitAddend, long explicitAddend) {
         assert getContent() == null || bb.array() == getContent();
         ((RelocatableSectionImpl) getElement()).markRelocationSite(offset, bb, k, symbolName, useImplicitAddend, explicitAddend);
     }

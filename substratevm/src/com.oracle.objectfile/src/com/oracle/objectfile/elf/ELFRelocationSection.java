@@ -108,6 +108,18 @@ public class ELFRelocationSection extends ELFSection {
 
     interface ELFRelocationMethod extends RelocationMethod {
 
+        // ELF relocations always use explicit addends
+
+        @Override
+        default boolean canUseImplicitAddend() {
+            return false;
+        }
+
+        @Override
+        default boolean canUseExplicitAddend() {
+            return true;
+        }
+
         long toLong();
     }
 
@@ -172,8 +184,9 @@ public class ELFRelocationSection extends ELFSection {
         }
     }
 
-    public Entry addEntry(ELFSection s, long offset, ELFRelocationMethod t, ELFSymtab.Entry sym, Long explicitAddend) {
-        if (explicitAddend != null) {
+    public Entry addEntry(ELFSection s, long offset, ELFRelocationMethod t, ELFSymtab.Entry sym, boolean useImplicitAddend, long explicitAddend) {
+        if (!useImplicitAddend) {
+            // has explicit addend
             if (!t.canUseExplicitAddend()) {
                 throw new IllegalArgumentException("cannot use relocation method " + t + " with explicit addends");
             }
@@ -181,6 +194,7 @@ public class ELFRelocationSection extends ELFSection {
                 throw new IllegalStateException("cannot create relocation with addend in .rel section");
             }
         } else {
+            // has implicit addend
             if (!t.canUseImplicitAddend()) {
                 throw new IllegalArgumentException("cannot use relocation method " + t + " with implicit addends");
             }
@@ -188,8 +202,7 @@ public class ELFRelocationSection extends ELFSection {
                 throw new IllegalStateException("cannot create relocation without addend in .rela section");
             }
         }
-        long addend = (explicitAddend != null) ? explicitAddend : 0L;
-        return entries.computeIfAbsent(new Entry(s, offset, t, sym, addend), Function.identity());
+        return entries.computeIfAbsent(new Entry(s, offset, t, sym, explicitAddend), Function.identity());
     }
 
     public boolean isDynamic() {

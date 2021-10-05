@@ -413,9 +413,9 @@ public abstract class ObjectFile {
          * @param symbolName the name of the symbol whose value is used to compute the fixed-up
          *            bytes
          * @param useImplicitAddend whether the current bytes are to be used as an addend
-         * @param explicitAddend a full-width addend, or null if useImplicitAddend is true
+         * @param explicitAddend a full-width addend, or 0 if useImplicitAddend is true
          */
-        void markRelocationSite(int offset, ByteBuffer bb, RelocationKind k, String symbolName, boolean useImplicitAddend, Long explicitAddend);
+        void markRelocationSite(int offset, ByteBuffer bb, RelocationKind k, String symbolName, boolean useImplicitAddend, long explicitAddend);
 
         /**
          * Force the creation of a relocation section/element for this section, and return it. This
@@ -446,7 +446,7 @@ public abstract class ObjectFile {
          * passed a buffer. It uses the byte array accessed by {@link #getContent} and
          * {@link #setContent}.
          */
-        void markRelocationSite(int offset, RelocationKind k, String symbolName, boolean useImplicitAddend, Long explicitAddend);
+        void markRelocationSite(int offset, RelocationKind k, String symbolName, boolean useImplicitAddend, long explicitAddend);
     }
 
     public interface NobitsSectionImpl extends ElementImpl {

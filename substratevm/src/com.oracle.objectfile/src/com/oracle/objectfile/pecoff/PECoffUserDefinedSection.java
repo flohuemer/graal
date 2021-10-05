@@ -29,6 +29,8 @@ import java.nio.ByteBuffer;
 import java.util.EnumSet;
 import java.util.Map;
 
+import org.graalvm.compiler.debug.GraalError;
+
 import com.oracle.objectfile.BuildDependency;
 import com.oracle.objectfile.ElementImpl;
 import com.oracle.objectfile.LayoutDecisionMap;
@@ -140,8 +142,8 @@ public class PECoffUserDefinedSection extends PECoffSection implements ObjectFil
     }
 
     @Override
-    public void markRelocationSite(int offset, ByteBuffer bb, ObjectFile.RelocationKind k, String symbolName, boolean useImplicitAddend, Long explicitAddend) {
-        if (useImplicitAddend != (explicitAddend == null)) {
+    public void markRelocationSite(int offset, ByteBuffer bb, ObjectFile.RelocationKind k, String symbolName, boolean useImplicitAddend, long explicitAddend) {
+        if (useImplicitAddend && explicitAddend != 0) {
             throw new IllegalArgumentException("must have either an explicit or implicit addend");
         }
         PECoffSymtab syms = (PECoffSymtab) getOwner().elementForName(".symtab");
@@ -164,17 +166,14 @@ public class PECoffUserDefinedSection extends PECoffSection implements ObjectFil
         int length = ObjectFile.RelocationKind.getRelocationSize(k);
         long currentInlineAddendValue = sbb.readTruncatedLong(length);
         long desiredInlineAddendValue;
-        if (explicitAddend != null) {
-            /*
-             * This assertion is conservatively disallowing double-addend (could
-             * "add currentValue to explicitAddend"), because that seems more likely to be a bug
-             * than a feature.
-             */
-            assert currentInlineAddendValue == 0;
-            desiredInlineAddendValue = explicitAddend;
-        } else {
-            desiredInlineAddendValue = currentInlineAddendValue;
-        }
+        GraalError.guarantee(!useImplicitAddend, "don't think these are ever used");
+        /*
+         * This assertion is conservatively disallowing double-addend (could
+         * "add currentValue to explicitAddend"), because that seems more likely to be a bug than a
+         * feature.
+         */
+        assert currentInlineAddendValue == 0;
+        desiredInlineAddendValue = explicitAddend;
 
         /*
          * One more complication: for PC-relative relocation, at least on x86-64, Coff linkers
