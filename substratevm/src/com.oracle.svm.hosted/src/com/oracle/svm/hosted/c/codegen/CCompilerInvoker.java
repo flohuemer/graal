@@ -73,13 +73,13 @@ public abstract class CCompilerInvoker {
         }
     }
 
-    public static CCompilerInvoker create(Path tempDirectory) {
+    public static CCompilerInvoker create(Path tempDirectory, boolean usingLLVMBackend) {
         OS hostOS = OS.getCurrent();
         switch (hostOS) {
             case LINUX:
                 return new LinuxCCompilerInvoker(tempDirectory);
             case DARWIN:
-                return new DarwinCCompilerInvoker(tempDirectory);
+                return new DarwinCCompilerInvoker(tempDirectory, usingLLVMBackend);
             case WINDOWS:
                 return new WindowsCCompilerInvoker(tempDirectory);
             default:
@@ -269,9 +269,11 @@ public abstract class CCompilerInvoker {
     }
 
     private static class DarwinCCompilerInvoker extends CCompilerInvoker {
+        private final boolean usingLLVMBackend;
 
-        DarwinCCompilerInvoker(Path tempDirectory) {
+        DarwinCCompilerInvoker(Path tempDirectory, boolean usingLLVMBackend) {
             super(tempDirectory);
+            this.usingLLVMBackend = usingLLVMBackend;
         }
 
         @Override
@@ -307,7 +309,11 @@ public abstract class CCompilerInvoker {
             if (guessed == null) {
                 UserError.abort("Darwin native toolchain (%s) has no matching native-image target architecture.", compilerInfo.targetArch);
             }
-            if (guessed != substrateTargetArch) {
+            /*
+             * Currently, the llvm backend can have a mismatch between the target and configured
+             * architecture.
+             */
+            if (!usingLLVMBackend && guessed != substrateTargetArch) {
                 UserError.abort("Darwin native toolchain (%s) implies native-image target architecture %s but configured native-image target architecture is %s.",
                                 compilerInfo.targetArch, guessed, substrateTargetArch);
             }

@@ -864,7 +864,7 @@ public class NativeImageGenerator {
                                 (NativeImageOptions.ExitAfterRelocatableImageWrite.getValue() && CAnnotationProcessorCache.Options.UseCAPCache.getValue());
 
                 if (!withoutCompilerInvoker) {
-                    CCompilerInvoker compilerInvoker = CCompilerInvoker.create(ImageSingletons.lookup(TemporaryBuildDirectoryProvider.class).getTemporaryBuildDirectory());
+                    CCompilerInvoker compilerInvoker = CCompilerInvoker.create(ImageSingletons.lookup(TemporaryBuildDirectoryProvider.class).getTemporaryBuildDirectory(), SubstrateOptions.useLLVMBackend());
                     compilerInvoker.verifyCompiler();
                     ImageSingletons.add(CCompilerInvoker.class, compilerInvoker);
                 }
