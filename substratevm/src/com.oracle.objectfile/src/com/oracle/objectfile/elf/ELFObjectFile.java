@@ -35,6 +35,9 @@ import java.util.Iterator;
 import java.util.Map;
 import java.util.Set;
 
+import org.graalvm.nativeimage.ImageSingletons;
+import org.graalvm.nativeimage.Platform;
+
 import com.oracle.objectfile.BuildDependency;
 import com.oracle.objectfile.ElementImpl;
 import com.oracle.objectfile.LayoutDecision;
@@ -45,15 +48,13 @@ import com.oracle.objectfile.SymbolTable;
 import com.oracle.objectfile.debuginfo.DebugInfoProvider;
 import com.oracle.objectfile.elf.dwarf.DwarfARangesSectionImpl;
 import com.oracle.objectfile.elf.dwarf.DwarfAbbrevSectionImpl;
+import com.oracle.objectfile.elf.dwarf.DwarfDebugInfo;
 import com.oracle.objectfile.elf.dwarf.DwarfFrameSectionImpl;
 import com.oracle.objectfile.elf.dwarf.DwarfInfoSectionImpl;
 import com.oracle.objectfile.elf.dwarf.DwarfLineSectionImpl;
-import com.oracle.objectfile.elf.dwarf.DwarfDebugInfo;
 import com.oracle.objectfile.elf.dwarf.DwarfStrSectionImpl;
 import com.oracle.objectfile.io.AssemblyBuffer;
 import com.oracle.objectfile.io.OutputAssembler;
-import org.graalvm.nativeimage.ImageSingletons;
-import org.graalvm.nativeimage.Platform;
 
 /**
  * Represents an ELF object file (of any kind: relocatable, shared library, executable, core, ...).
@@ -614,10 +615,12 @@ public class ELFObjectFile extends ObjectFile {
             return dependencies;
         }
 
-        private OutputAssembler writeToOutputAssembler(Map<Element, LayoutDecisionMap> alreadyDecided) {
+        @Override
+        public byte[] getOrDecideContent(Map<Element, LayoutDecisionMap> alreadyDecided, byte[] contentHint) {
             // we serialize ourselves by writing a Struct to a bytebuffer
             OutputAssembler oa = AssemblyBuffer.createOutputAssembler(getDataEncoding().toByteOrder());
-            Struct contents = new Struct(getType(), getMachine()); // also creates ident struct, which we need to populate
+            /* Also creates ident struct, which we need to populate. */
+            Struct contents = new Struct(getType(), getMachine());
 
             // don't assign magic -- its default value is correct
             contents.ident.fileClass = getFileClass();
@@ -650,12 +653,6 @@ public class ELFObjectFile extends ObjectFile {
             contents.shstrndx = sawShStrTab ? index : 0;
             contents.write(oa);
 
-            return oa;
-        }
-
-        @Override
-        public byte[] getOrDecideContent(Map<Element, LayoutDecisionMap> alreadyDecided, byte[] contentHint) {
-            OutputAssembler oa = writeToOutputAssembler(alreadyDecided);
             if (contentHint != null) {
                 // FIXME: (for roundtripping) now we've written our own content,
                 // if we were passed a hint,
@@ -671,7 +668,7 @@ public class ELFObjectFile extends ObjectFile {
 
         @Override
         public int getOrDecideSize(Map<Element, LayoutDecisionMap> alreadyDecided, int sizeHint) {
-            int size = writeToOutputAssembler(alreadyDecided).pos();
+            int size = (new Struct(getType(), getMachine())).getWrittenSize();
             assert sizeHint == -1 || sizeHint == size;
             return size;
         }
