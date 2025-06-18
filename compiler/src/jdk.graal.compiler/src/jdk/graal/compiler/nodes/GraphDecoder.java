@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2015, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -34,7 +34,6 @@ import java.util.Arrays;
 import java.util.BitSet;
 import java.util.Deque;
 import java.util.EnumSet;
-import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.SortedMap;
@@ -43,6 +42,7 @@ import java.util.TreeMap;
 import org.graalvm.collections.EconomicMap;
 import org.graalvm.collections.EconomicSet;
 import org.graalvm.collections.Equivalence;
+import org.graalvm.collections.IntArrayBuilder;
 
 import jdk.graal.compiler.core.common.Fields;
 import jdk.graal.compiler.core.common.PermanentBailoutException;
@@ -330,6 +330,15 @@ public class GraphDecoder {
          */
         public final Node[] initialCreatedNodes;
 
+        /**
+         * The written set of all nodes in this loop scope. Each bit represents a node orderId. If
+         * the bit is set, the node orderId has been written in this scope and needs to be read from
+         * the {@link LoopScope#createdNodes}. If the bit is not set, the node orderId has not been
+         * written in this scope and can be read from the {@link LoopScope#initialCreatedNodes}. The
+         * written set is null if it is not used in this loop scope.
+         */
+        public final BitSet writtenNodes;
+
         protected LoopScope(MethodScope methodScope) {
             this.methodScope = methodScope;
             this.outer = null;
@@ -345,12 +354,38 @@ public class GraphDecoder {
             this.createdNodes = new Node[nodeCount];
             this.initialCreatedNodes = null;
             this.trigger = LoopScopeTrigger.START;
+            this.writtenNodes = null;
         }
 
+        /**
+         * Creates a new loop scope that uses a written set. As long as node orderIds are not
+         * written in this scope, the nodes are read from the initial nodes
+         * ({@link LoopScope#initialCreatedNodes}). As soon as a node orderId is written, its node
+         * is stored in the created nodes ({@link LoopScope#createdNodes}) and reads access the
+         * created nodes instead of the initial nodes.
+         */
         protected LoopScope(MethodScope methodScope, LoopScope outer, int loopDepth, int loopIteration, int loopBeginOrderId, LoopScopeTrigger trigger, Node[] initialCreatedNodes, Node[] createdNodes,
                         Deque<LoopScope> nextIterationFromLoopExitDuplication,
                         Deque<LoopScope> nextIterationFromLoopEndDuplication,
                         Deque<LoopScope> nextIterationsFromUnrolling, EconomicMap<LoopExplosionState, LoopExplosionState> iterationStates) {
+            this(methodScope, outer, loopDepth, loopIteration, loopBeginOrderId, trigger, initialCreatedNodes, createdNodes, nextIterationFromLoopExitDuplication, nextIterationFromLoopEndDuplication,
+                            nextIterationsFromUnrolling, iterationStates, true);
+        }
+
+        /**
+         * Creates a new loop scope that uses a written set based on {@code reuseInitialNodes}. If
+         * {@code reuseInitialNodes} is {@code true}, as long as node orderIds are not written in
+         * this scope, the nodes are read from the initial nodes
+         * ({@link LoopScope#initialCreatedNodes}). As soon as a node orderId is written, its node
+         * is stored in the created nodes ({@link LoopScope#createdNodes}) and reads access the
+         * created nodes instead of the initial nodes. If {@code reuseInitialNodes} is
+         * {@code false}, all read accesses use the created nodes.
+         */
+        protected LoopScope(MethodScope methodScope, LoopScope outer, int loopDepth, int loopIteration, int loopBeginOrderId, LoopScopeTrigger trigger, Node[] initialCreatedNodes, Node[] createdNodes,
+                        Deque<LoopScope> nextIterationFromLoopExitDuplication,
+                        Deque<LoopScope> nextIterationFromLoopEndDuplication,
+                        Deque<LoopScope> nextIterationsFromUnrolling, EconomicMap<LoopExplosionState, LoopExplosionState> iterationStates,
+                        boolean reuseInitialNodes) {
             this.methodScope = methodScope;
             this.outer = outer;
             this.loopDepth = loopDepth;
@@ -364,6 +399,98 @@ public class GraphDecoder {
             this.nodesToProcess = new BitSet(methodScope.maxFixedNodeOrderId);
             this.initialCreatedNodes = initialCreatedNodes;
             this.createdNodes = createdNodes;
+            if (reuseInitialNodes && initialCreatedNodes != null) {
+                this.writtenNodes = new BitSet(createdNodes.length);
+            } else {
+                this.writtenNodes = null;
+            }
+        }
+
+        /**
+         * Sets a node in the initial nodes of this scope and sets the written status of the node
+         * orderId to {@code false}. Reads of the node orderId after calling this method will access
+         * the initial nodes instead of the created nodes.
+         *
+         * @param nodeOrderId The orderId of the node
+         * @param node The node to be set in the initial nodes
+         */
+        public void setInitialNode(int nodeOrderId, Node node) {
+            if (writtenNodes != null) {
+                writtenNodes.clear(nodeOrderId);
+            }
+            initialCreatedNodes[nodeOrderId] = node;
+        }
+
+        /**
+         * Sets a node in the created nodes of this scope and sets the written status of the node
+         * orderId to {@code true}. Reads of the node orderId after calling this method will access
+         * the created nodes instead of the initial nodes.
+         *
+         * @param nodeOrderId The orderId of the node
+         * @param node The node to be set in the created nodes
+         */
+        public void setNode(int nodeOrderId, Node node) {
+            if (writtenNodes != null) {
+                writtenNodes.set(nodeOrderId);
+            }
+            createdNodes[nodeOrderId] = node;
+        }
+
+        /**
+         * Copies the nodes in the given array into the created nodes and sets the written status
+         * for all node orderIds to {@code true}. The nodes are copied to the node orderIds in
+         * consecutive ascending order, starting with the {@code firstNodeOrderId}.
+         *
+         * @param firstNodeOrderId The first node orderId (Node orderId of the first element in the
+         *            array)
+         * @param nodes The nodes to be copied into the created nodes
+         */
+        public void setNodes(int firstNodeOrderId, Node[] nodes) {
+            final int length = nodes.length;
+            if (writtenNodes != null) {
+                writtenNodes.set(firstNodeOrderId, firstNodeOrderId + length);
+            }
+            System.arraycopy(nodes, 0, createdNodes, firstNodeOrderId, length);
+        }
+
+        /**
+         * Gets the node for the given node orderId.
+         *
+         * @param nodeOrderId The node orderId to retrieve
+         * @return The node with the given node orderId. If the written status of the node orderId
+         *         is {@code true} or the scope does not use a written set, the node is read from
+         *         the created nodes. Otherwise, it is read form the initial nodes.
+         */
+        public Node getNode(int nodeOrderId) {
+            if (writtenNodes == null || writtenNodes.get(nodeOrderId)) {
+                return createdNodes[nodeOrderId];
+            } else {
+                assert initialCreatedNodes != null : "Initial nodes not initialized when using written set inside loop scope";
+                return initialCreatedNodes[nodeOrderId];
+            }
+        }
+
+        /**
+         * Since the created nodes are only updated when written in this scope, this method combines
+         * the nodes of the initial nodes and created nodes into a single array that contains the
+         * latest written node for each node orderId. If this scope does not use a written set, this
+         * method returns the current created nodes without copying them into a new array.
+         * Otherwise, a new array combining initial and created nodes is created.
+         *
+         * @return The combination of initial and created nodes.
+         */
+        public Node[] materializeCreatedNodes() {
+            if (initialCreatedNodes == null || writtenNodes == null) {
+                return createdNodes;
+            } else {
+                final Node[] nodes = Arrays.copyOf(initialCreatedNodes, createdNodes.length);
+                int i = writtenNodes.nextSetBit(0);
+                while (i != -1) {
+                    nodes[i] = createdNodes[i];
+                    i = writtenNodes.nextSetBit(i + 1);
+                }
+                return nodes;
+            }
         }
 
         @Override
@@ -419,8 +546,11 @@ public class GraphDecoder {
             for (ValueNode value : state.values()) {
                 if (value == null) {
                     h = h * 31 + 1234;
+                } else if (value instanceof ProxyPlaceholder p) {
+                    // Use the valueHashCode to avoid unwrapping the proxy placeholder
+                    h = h * 31 + p.valueHashCode;
                 } else {
-                    h = h * 31 + ProxyPlaceholder.unwrap(value).hashCode();
+                    h = h * 31 + value.hashCode();
                 }
             }
             this.hashCode = h;
@@ -428,24 +558,44 @@ public class GraphDecoder {
 
         @Override
         public boolean equals(Object obj) {
-            if (!(obj instanceof LoopExplosionState)) {
+            if (!(obj instanceof LoopExplosionState other)) {
                 return false;
             }
 
-            FrameState otherState = ((LoopExplosionState) obj).state;
-            FrameState thisState = state;
+            // Check the hash code first to avoid iterating the frame states.
+            if (hashCode != other.hashCode) {
+                return false;
+            }
+
+            final FrameState thisState = state;
+            final FrameState otherState = other.state;
             assert thisState.outerFrameState() == otherState.outerFrameState() : Assertions.errorMessage(thisState, thisState.outerFrameState(), otherState, otherState.outerFrameState());
 
-            Iterator<ValueNode> thisIter = thisState.values().iterator();
-            Iterator<ValueNode> otherIter = otherState.values().iterator();
-            while (thisIter.hasNext() && otherIter.hasNext()) {
-                ValueNode thisValue = ProxyPlaceholder.unwrap(thisIter.next());
-                ValueNode otherValue = ProxyPlaceholder.unwrap(otherIter.next());
-                if (thisValue != otherValue) {
-                    return false;
+            final NodeInputList<ValueNode> thisValues = thisState.values();
+            final NodeInputList<ValueNode> otherValues = otherState.values();
+
+            final int size = thisValues.size();
+            if (size != otherValues.size()) {
+                return false;
+            }
+
+            for (int i = 0; i < size; i++) {
+                final ValueNode thisValue = thisValues.get(i);
+                final ValueNode otherValue = otherValues.get(i);
+
+                if (thisValue instanceof ProxyPlaceholder thisP && otherValue instanceof ProxyPlaceholder otherP) {
+                    // Use the equalsHashCode to avoid unwrapping the proxy placeholders
+                    if (thisP.equalsHashCode != otherP.equalsHashCode) {
+                        return false;
+                    }
+                } else {
+                    if (ProxyPlaceholder.unwrap(thisValue) != ProxyPlaceholder.unwrap(otherValue)) {
+                        return false;
+                    }
                 }
             }
-            return thisIter.hasNext() == otherIter.hasNext();
+
+            return true;
         }
 
         @Override
@@ -515,15 +665,68 @@ public class GraphDecoder {
         @Input ValueNode value;
         @Input(InputType.Association) Node proxyPoint;
 
+        /**
+         * The latest node orderIds of this proxy placeholder in the created nodes of a
+         * {@link LoopScope}. Since the node orderIds in the created nodes rarely change, this array
+         * allows for faster replacement of proxy placeholders during merge explode.
+         */
+        private final int[] nodeOrderIds;
+
+        /**
+         * The latest node orderIds of this proxy placeholder in the initial nodes of a
+         * {@link LoopScope}. Since the node orderIDs in the initial nodes rarely change, this array
+         * allows for faster replacement of proxy placeholders during merge explode.
+         */
+        private final int[] initialNodeOrderIds;
+
+        /**
+         * Whether {@link ProxyPlaceholder#nodeOrderIds} and
+         * {@link ProxyPlaceholder#initialNodeOrderIds} still represent the latest node orderIds of
+         * this node. This flag needs to be invalided, if this node is added to a new node orderId
+         * or removed from an existing one.
+         */
+        private boolean validNodeOrderIds;
+
+        /**
+         * Cached version of the hash code of the original value (the node returned by
+         * {@link ProxyPlaceholder#unwrap(ValueNode)} when creating this proxy placeholder) intended
+         * to speed up hash lookups.
+         */
+        protected final int valueHashCode;
+
+        /**
+         * Cached version of the hash code of the current value (the node returned by
+         * {@link ProxyPlaceholder#unwrap(ValueNode)}) intended to speed up comparisons.
+         */
+        protected int equalsHashCode;
+
         public ProxyPlaceholder(ValueNode value, MergeNode proxyPoint) {
+            this(value, proxyPoint, null, null);
+        }
+
+        public ProxyPlaceholder(ValueNode value, MergeNode proxyPoint, int[] nodeOrderIds, int[] initialNodeOrderIds) {
             super(TYPE, value.stamp(NodeView.DEFAULT));
             this.value = value;
             this.proxyPoint = proxyPoint;
+            this.nodeOrderIds = nodeOrderIds;
+            this.initialNodeOrderIds = initialNodeOrderIds;
+            this.validNodeOrderIds = nodeOrderIds != null && initialNodeOrderIds != null;
+            this.valueHashCode = value instanceof ProxyPlaceholder p ? p.valueHashCode : value.hashCode();
+            this.equalsHashCode = valueHashCode;
+
         }
 
         void setValue(ValueNode value) {
             updateUsages(this.value, value);
             this.value = value;
+            this.equalsHashCode = unwrap(value).hashCode();
+        }
+
+        /**
+         * Invalidates the node orderIds associated with this proxy placeholder.
+         */
+        public void invalidateNodeOrderIds() {
+            validNodeOrderIds = false;
         }
 
         @Override
@@ -583,7 +786,7 @@ public class GraphDecoder {
                     if (nodeReference.orderId < 0) {
                         throw GraalError.shouldNotReachHere("EncodeNodeReference is not in 'encoded' state"); // ExcludeFromJacocoGeneratedReport
                     }
-                    nodeReference.node = loopScope.createdNodes[nodeReference.orderId];
+                    nodeReference.node = loopScope.getNode(nodeReference.orderId);
                     if (nodeReference.node == null || !nodeReference.node.isAlive()) {
                         throw GraalError.shouldNotReachHere("Could not decode the EncodedNodeReference"); // ExcludeFromJacocoGeneratedReport
                     }
@@ -703,8 +906,8 @@ public class GraphDecoder {
 
         /* Register nodes that were created while decoding the loop to the outside scope. */
         for (int i = 0; i < loopScope.createdNodes.length; i++) {
-            if (loopScope.outer.createdNodes[i] == null) {
-                loopScope.outer.createdNodes[i] = loopScope.createdNodes[i];
+            if (loopScope.outer.getNode(i) == null) {
+                loopScope.outer.setNode(i, loopScope.getNode(i));
             }
         }
     }
@@ -770,13 +973,19 @@ public class GraphDecoder {
                                     : (methodScope.loopExplosion.mergeLoops()
                                                     ? Arrays.copyOf(outerScope.initialCreatedNodes, outerScope.initialCreatedNodes.length)
                                                     : outerScope.initialCreatedNodes);
+                    /*
+                     * Since the initial nodes and created nodes are from two different loop scopes,
+                     * we cannot use the written set in the new loop scope and set reuseInitialNodes
+                     * to false.
+                     */
                     successorAddScope = new LoopScope(methodScope, outerScope.outer, outerScope.loopDepth, nextIterationNumber, outerScope.loopBeginOrderId, LoopScopeTrigger.LOOP_EXIT_DUPLICATION,
                                     initialCreatedNodes,
                                     Arrays.copyOf(loopScope.initialCreatedNodes, loopScope.initialCreatedNodes.length),
                                     outerScope.nextIterationFromLoopExitDuplication,
                                     outerScope.nextIterationFromLoopEndDuplication,
                                     outerScope.nextIterationsFromUnrolling,
-                                    outerScope.iterationStates);
+                                    outerScope.iterationStates,
+                                    false);
                     checkLoopExplosionIteration(methodScope, successorAddScope);
 
                     /*
@@ -785,7 +994,7 @@ public class GraphDecoder {
                      * do not merge, but instead keep exploding.
                      */
                     for (int id = outerScope.nodesToProcess.nextSetBit(0); id >= 0; id = outerScope.nodesToProcess.nextSetBit(id + 1)) {
-                        successorAddScope.createdNodes[id] = null;
+                        successorAddScope.setNode(id, null);
                     }
 
                     outerScope.nextIterationFromLoopExitDuplication.addLast(successorAddScope);
@@ -903,9 +1112,16 @@ public class GraphDecoder {
                          */
                         assert phiNodeScope == phiInputScope : phiInputScope + "!=" + phiInputScope;
                         assert phiNodeScope == loopScope : phiNodeScope + "!=" + loopScope;
+                        /*
+                         * Since we use the created nodes as either initial nodes or created nodes
+                         * of the next loop scope, we need to materialize the created nodes of the
+                         * current loop scope (i.e., combine its initial and created nodes into a
+                         * single array).
+                         */
+                        final Node[] createdNodes = loopScope.materializeCreatedNodes();
                         resultScope = new LoopScope(methodScope, loopScope, loopScope.loopDepth + 1, 0, mergeOrderId, LoopScopeTrigger.START,
-                                        methodScope.loopExplosion.useExplosion() ? Arrays.copyOf(loopScope.createdNodes, loopScope.createdNodes.length) : null,
-                                        methodScope.loopExplosion.useExplosion() ? Arrays.copyOf(loopScope.createdNodes, loopScope.createdNodes.length) : loopScope.createdNodes, //
+                                        methodScope.loopExplosion.useExplosion() ? Arrays.copyOf(createdNodes, createdNodes.length) : null,
+                                        methodScope.loopExplosion.useExplosion() ? new Node[createdNodes.length] : createdNodes, //
                                         methodScope.loopExplosion.duplicateLoopExits() || methodScope.loopExplosion.mergeLoops() ? new ArrayDeque<>(2) : null,
                                         methodScope.loopExplosion.duplicateLoopEnds() ? new ArrayDeque<>(2) : null,
                                         methodScope.loopExplosion.unrollLoops() ? new ArrayDeque<>(2) : null, //
@@ -1083,26 +1299,41 @@ public class GraphDecoder {
                 public ValueNode apply(int index, ValueNode frameStateValue) {
                     if (frameStateValue == null || frameStateValue.isConstant() || !graph.isNew(methodScope.methodStartMark, frameStateValue)) {
                         return frameStateValue;
-
                     } else {
-                        ProxyPlaceholder newFrameStateValue = graph.unique(new ProxyPlaceholder(frameStateValue, merge));
-
-                        /*
-                         * We do not have the orderID of the value anymore, so we need to search
-                         * through the complete list of nodes to find a match.
-                         */
-                        for (int i = 0; i < loopScope.createdNodes.length; i++) {
-                            if (loopScope.createdNodes[i] == frameStateValue) {
-                                loopScope.createdNodes[i] = newFrameStateValue;
-                            }
-                        }
-
-                        if (loopScope.initialCreatedNodes != null) {
-                            for (int i = 0; i < loopScope.initialCreatedNodes.length; i++) {
-                                if (loopScope.initialCreatedNodes[i] == frameStateValue) {
-                                    loopScope.initialCreatedNodes[i] = newFrameStateValue;
+                        final ProxyPlaceholder newFrameStateValue;
+                        if (frameStateValue instanceof ProxyPlaceholder p && p.validNodeOrderIds) {
+                            // if the node orderIds cached in the proxy placeholder are still
+                            // up-to-date, we do not have to search the complete list and instead
+                            // reuse the cached ids.
+                            newFrameStateValue = graph.unique(new ProxyPlaceholder(frameStateValue, merge, p.nodeOrderIds, p.initialNodeOrderIds));
+                        } else {
+                            final IntArrayBuilder initialNodeOrderIds = new IntArrayBuilder();
+                            final IntArrayBuilder nodeOrderIds = new IntArrayBuilder();
+                            /*
+                             * We do not have the orderId of the value anymore, so we need to search
+                             * through the complete list of nodes to find a match.
+                             */
+                            if (loopScope.initialCreatedNodes != null) {
+                                for (int i = 0; i < loopScope.initialCreatedNodes.length; i++) {
+                                    if (loopScope.initialCreatedNodes[i] == frameStateValue) {
+                                        initialNodeOrderIds.add(i);
+                                    }
                                 }
                             }
+                            for (int i = 0; i < loopScope.createdNodes.length; i++) {
+                                if (loopScope.getNode(i) == frameStateValue) {
+                                    nodeOrderIds.add(i);
+                                }
+                            }
+                            newFrameStateValue = graph.unique(new ProxyPlaceholder(frameStateValue, merge, nodeOrderIds.toArray(), initialNodeOrderIds.toArray()));
+                        }
+                        if (loopScope.initialCreatedNodes != null) {
+                            for (int orderId : newFrameStateValue.initialNodeOrderIds) {
+                                loopScope.setInitialNode(orderId, newFrameStateValue);
+                            }
+                        }
+                        for (int orderId : newFrameStateValue.nodeOrderIds) {
+                            loopScope.setNode(orderId, newFrameStateValue);
                         }
                         return newFrameStateValue;
                     }
@@ -1162,9 +1393,27 @@ public class GraphDecoder {
         }
         if (trigger != null) {
             int nextIterationNumber = nextIterations.isEmpty() ? loopScope.loopIteration + 1 : nextIterations.getLast().loopIteration + 1;
+            /*
+             * We try to reuse existing initial and created nodes as often as possible. Therefore,
+             * if there are no more nodes to process in the current loop scope, we reuse both arrays
+             * to eliminate allocation and copying overhead. Only if there are still nodes to
+             * process, for example, if the current loop scope contains a control split and both
+             * branches continue in independent new loop scopes, we copy the initial nodes and
+             * create a new array for the created nodes.
+             */
+            final Node[] initialCreatedNodes;
+            final Node[] createdNodes;
+            if (loopScope.nodesToProcess.isEmpty()) {
+                initialCreatedNodes = loopScope.initialCreatedNodes;
+                createdNodes = loopScope.createdNodes;
+            } else {
+                initialCreatedNodes = Arrays.copyOf(loopScope.initialCreatedNodes, loopScope.initialCreatedNodes.length);
+                createdNodes = new Node[loopScope.createdNodes.length];
+            }
+
             LoopScope nextIterationScope = new LoopScope(methodScope, loopScope.outer, loopScope.loopDepth, nextIterationNumber, loopScope.loopBeginOrderId, trigger,
-                            methodScope.loopExplosion.mergeLoops() ? Arrays.copyOf(loopScope.initialCreatedNodes, loopScope.initialCreatedNodes.length) : loopScope.initialCreatedNodes,
-                            Arrays.copyOf(loopScope.initialCreatedNodes, loopScope.initialCreatedNodes.length),
+                            initialCreatedNodes,
+                            createdNodes,
                             loopScope.nextIterationFromLoopExitDuplication,
                             loopScope.nextIterationFromLoopEndDuplication,
                             loopScope.nextIterationsFromUnrolling,
@@ -1310,7 +1559,7 @@ public class GraphDecoder {
             }
 
             ValueNode replacement;
-            ValueNode existing = (ValueNode) outerScope.createdNodes[proxyOrderId];
+            ValueNode existing = (ValueNode) outerScope.getNode(proxyOrderId);
             if (existing == null || existing == phiInput) {
                 /*
                  * We are at the first loop exit, or the proxy carries the same value for all exits.
@@ -1369,7 +1618,6 @@ public class GraphDecoder {
     }
 
     protected void handlePhiFunctions(MethodScope methodScope, LoopScope phiInputScope, LoopScope phiNodeScope, AbstractEndNode end, AbstractMergeNode merge) {
-
         if (end instanceof LoopEndNode) {
             /*
              * Fix the loop end index and the number of loop ends. When we do canonicalization
@@ -1398,51 +1646,82 @@ public class GraphDecoder {
          */
         boolean lazyPhi = allowLazyPhis() && (!(merge instanceof LoopBeginNode) || methodScope.loopExplosion.useExplosion());
         int numPhis = methodScope.reader.getUVInt();
-        for (int i = 0; i < numPhis; i++) {
-            int phiInputOrderId = readOrderId(methodScope);
-            int phiNodeOrderId = readOrderId(methodScope);
 
-            ValueNode phiInput = (ValueNode) ensureNodeCreated(methodScope, phiInputScope, phiInputOrderId);
-            ValueNode existing = (ValueNode) lookupNode(phiNodeScope, phiNodeOrderId);
-
-            if (existing != null && merge.phiPredecessorCount() == 1) {
-                /*
-                 * When exploding loops and the code after the loop (FULL_EXPLODE_UNTIL_RETURN),
-                 * then an existing value can already be registered: Parsing of the code before the
-                 * loop registers it when preparing for the later merge. The code after the loop,
-                 * which starts with a clone of the values that were created before the loop, sees
-                 * the stale value when processing the merge the first time. We can safely ignore
-                 * the stale value because it will never be needed to be merged (we are exploding
-                 * until we hit a return).
-                 */
-                assert methodScope.loopExplosion.duplicateLoopExits();
-                assert phiNodeScope.loopIteration > 0 : Assertions.errorMessageContext("phiNodeScope.loopIteration", phiNodeScope.loopIteration);
-                existing = null;
+        if (numPhis > 1 && merge instanceof LoopBeginNode) {
+            /*
+             * Since we try to reuse the initial and created nodes of loop scopes as often as
+             * possible, it can happen that the input scope (phiInputScope) and node scope
+             * (phiNodeScope) use the same arrays. Since phis are created into the node scope based
+             * on the orderId of nodes in the input scope, it could happen that creating a new node
+             * in the node scope overwrites a node that is required by another phi value in the
+             * input scope. For example, if the first phi reads from orderId [1] in the input scope
+             * and writes to orderId [2] in the node scope, and the second phi reads from orderId
+             * [2] in the input scope, the original value would no longer exist in the array.
+             * Therefore, we first extract all phi values from the input scope and then create the
+             * new phi values in the node scope.
+             */
+            final ValueNode[] phiInputs = new ValueNode[numPhis];
+            final int[] phiNodeOrderIds = new int[numPhis];
+            for (int i = 0; i < numPhis; i++) {
+                final int phiInputOrderId = readOrderId(methodScope);
+                phiNodeOrderIds[i] = readOrderId(methodScope);
+                phiInputs[i] = (ValueNode) ensureNodeCreated(methodScope, phiInputScope, phiInputOrderId);
             }
-
-            if (lazyPhi && (existing == null || existing == phiInput)) {
-                /* Phi function not yet necessary. */
-                registerNode(phiNodeScope, phiNodeOrderId, phiInput, true, false);
-
-            } else if (!merge.isPhiAtMerge(existing)) {
-                /*
-                 * Phi function is necessary. Create it and fill it with existing inputs as well as
-                 * the new input.
-                 */
-                registerNode(phiNodeScope, phiNodeOrderId, null, true, true);
-                PhiNode phi = (PhiNode) ensureNodeCreated(methodScope, phiNodeScope, phiNodeOrderId);
-
-                phi.setMerge(merge);
-                for (int j = 0; j < merge.phiPredecessorCount() - 1; j++) {
-                    phi.addInput(existing);
-                }
-                phi.addInput(phiInput);
-
-            } else {
-                /* Phi node has been created before, so just add the new input. */
-                PhiNode phi = (PhiNode) existing;
-                phi.addInput(phiInput);
+            for (int i = 0; i < numPhis; i++) {
+                final int phiNodeOrderId = phiNodeOrderIds[i];
+                final ValueNode phiInput = phiInputs[i];
+                handlePhi(methodScope, phiNodeScope, merge, phiInput, phiNodeOrderId, lazyPhi);
             }
+        } else {
+            for (int i = 0; i < numPhis; i++) {
+                int phiInputOrderId = readOrderId(methodScope);
+                int phiNodeOrderId = readOrderId(methodScope);
+                final ValueNode phiInput = (ValueNode) ensureNodeCreated(methodScope, phiInputScope, phiInputOrderId);
+                handlePhi(methodScope, phiNodeScope, merge, phiInput, phiNodeOrderId, lazyPhi);
+            }
+        }
+    }
+
+    private void handlePhi(MethodScope methodScope, LoopScope phiNodeScope, AbstractMergeNode merge, ValueNode phiInput, int phiNodeOrderId, boolean lazyPhi) {
+        ValueNode existing = (ValueNode) lookupNode(phiNodeScope, phiNodeOrderId);
+
+        if (existing != null && merge.phiPredecessorCount() == 1) {
+            /*
+             * When exploding loops and the code after the loop (FULL_EXPLODE_UNTIL_RETURN), then an
+             * existing value can already be registered: Parsing of the code before the loop
+             * registers it when preparing for the later merge. The code after the loop, which
+             * starts with a clone of the values that were created before the loop, sees the stale
+             * value when processing the merge the first time. We can safely ignore the stale value
+             * because it will never be needed to be merged (we are exploding until we hit a
+             * return).
+             */
+            assert methodScope.loopExplosion.duplicateLoopExits();
+            assert phiNodeScope.loopIteration > 0 : Assertions.errorMessageContext("phiNodeScope.loopIteration", phiNodeScope.loopIteration);
+            existing = null;
+        }
+
+        if (lazyPhi && (existing == null || existing == phiInput)) {
+            /* Phi function not yet necessary. */
+            registerNode(phiNodeScope, phiNodeOrderId, phiInput, true, false);
+
+        } else if (!merge.isPhiAtMerge(existing)) {
+            /*
+             * Phi function is necessary. Create it and fill it with existing inputs as well as the
+             * new input.
+             */
+            registerNode(phiNodeScope, phiNodeOrderId, null, true, true);
+            PhiNode phi = (PhiNode) ensureNodeCreated(methodScope, phiNodeScope, phiNodeOrderId);
+
+            phi.setMerge(merge);
+            for (int j = 0; j < merge.phiPredecessorCount() - 1; j++) {
+                phi.addInput(existing);
+            }
+            phi.addInput(phiInput);
+
+        } else {
+            /* Phi node has been created before, so just add the new input. */
+            PhiNode phi = (PhiNode) existing;
+            phi.addInput(phiInput);
         }
     }
 
@@ -1769,14 +2048,23 @@ public class GraphDecoder {
     }
 
     protected Node lookupNode(LoopScope loopScope, int nodeOrderId) {
-        return loopScope.createdNodes[nodeOrderId];
+        return loopScope.getNode(nodeOrderId);
     }
 
     protected void registerNode(LoopScope loopScope, int nodeOrderId, Node node, boolean allowOverwrite, boolean allowNull) {
         assert node == null || node.isAlive();
         assert allowNull || node != null;
         assert allowOverwrite || lookupNode(loopScope, nodeOrderId) == null;
-        loopScope.createdNodes[nodeOrderId] = node;
+
+        // Check for proxy placeholder orderId invalidations
+        if (lookupNode(loopScope, nodeOrderId) instanceof ProxyPlaceholder p) {
+            p.invalidateNodeOrderIds();
+        }
+        if (node instanceof ProxyPlaceholder p) {
+            p.invalidateNodeOrderIds();
+        }
+
+        loopScope.setNode(nodeOrderId, node);
         if (loopScope.methodScope.inliningLogDecoder != null) {
             loopScope.methodScope.inliningLogDecoder.registerNode(loopScope.methodScope.inliningLog, node, nodeOrderId);
         }
